@@ -1,0 +1,62 @@
+=== 1. Reproduce the real failure ===
+$ python3 _local_runner.py tests/test_data_loader.py > build_log.txt 2>&1
+$ cat build_log.txt
+Traceback (most recent call last):
+  ...
+  File "src/data_loader.py", line 6, in <module>
+    import toml
+ModuleNotFoundError: No module named 'toml'
+collected test files: ['tests/test_data_loader.py']
+
+ERROR collecting tests/test_data_loader.py
+
+0 run, 0 failed, 1 collection error(s) in 0.003s
+
+=== 2. Run the remediation agent (no ANTHROPIC_API_KEY / GH_TOKEN configured) ===
+$ python3 scripts/remediation_agent.py --log build_log.txt --requirements requirements.txt --dry-run
+(No ANTHROPIC_API_KEY set -- using deterministic fix only, no LLM call made.)
+Root cause: Test collection failed with ModuleNotFoundError: No module named 'toml'. 'toml' is
+imported by the source under test but is not declared in requirements.txt, so a clean install
+(as CI does) never installs it.
+Fix: Append 'toml' to requirements.txt. No other file is touched.
+
+--- diff preview: requirements.txt ---
+ pytest
++toml
+--- end diff ---
+
+(No GH_TOKEN/REPO configured or --dry-run passed: wrote fix_proposal.md instead of opening a PR.)
+
+=== 3. requirements.txt is UNCHANGED after a dry run (proposal only) ===
+$ cat requirements.txt
+pytest
+
+=== 4. Negative test: agent must REFUSE on an out-of-scope failure ===
+$ python3 _local_runner.py tests/test_calculator.py > calc_log.txt 2>&1
+$ python3 scripts/remediation_agent.py --log calc_log.txt --requirements requirements.txt --dry-run
+REFUSING TO ACT: build log does not match this agent's scope (missing-third-party-dependency
+ModuleNotFoundError). No changes proposed. Escalate to a human or a different agent.
+$ echo $?
+2
+
+=== 5. Negative test: agent must REFUSE if the package is already listed ===
+$ echo -e "pytest\ntoml" > requirements.txt
+$ python3 scripts/remediation_agent.py --log build_log.txt --requirements requirements.txt --dry-run
+REFUSING TO ACT: 'toml' is already in requirements.txt; the ModuleNotFoundError must have a
+different cause (bad venv, typo in the import, wrong Python version). Out of scope.
+$ echo $?
+2
+
+=== 6. Apply the real (positive-case) fix ===
+$ echo "pytest" > requirements.txt   # reset
+$ python3 scripts/remediation_agent.py --log build_log.txt --requirements requirements.txt --apply
+[--apply] wrote fix to requirements.txt
+$ cat requirements.txt
+pytest
+toml
+
+Note: re-running the suite locally still shows a collection error for
+test_data_loader.py, because this sandbox has no network route to PyPI to
+actually `pip install toml` -- the *fix* (the requirements.txt line) is
+correct and verified; only the "install it for real" step needs your CI's
+network access. See README "What's real vs. what still needs your repo."

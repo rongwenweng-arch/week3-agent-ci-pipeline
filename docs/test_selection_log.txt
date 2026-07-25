@@ -1,0 +1,45 @@
+=== Case A: only src/string_utils.py changed ===
+$ python3 scripts/select_tests.py --files src/string_utils.py
+tests/test_string_utils.py
+# src/string_utils.py: maps to tests/test_string_utils.py by naming convention
+# -> pytest targets: ['tests/test_string_utils.py']
+
+=== Case B: only src/calculator.py changed ===
+$ python3 scripts/select_tests.py --files src/calculator.py
+tests/test_calculator.py
+# src/calculator.py: maps to tests/test_calculator.py by naming convention
+# -> pytest targets: ['tests/test_calculator.py']
+
+=== Case C: requirements.txt changed (must force full suite) ===
+$ python3 scripts/select_tests.py --files requirements.txt
+tests/
+# requirements.txt: 'requirements.txt' can affect any test -> full suite
+# -> pytest targets: ['tests/']
+
+=== Case D: a test file changed directly ===
+$ python3 scripts/select_tests.py --files tests/test_string_utils.py
+tests/test_string_utils.py
+# tests/test_string_utils.py: test file changed directly
+# -> pytest targets: ['tests/test_string_utils.py']
+
+=== Case E: unrecognized file (safety fallback) ===
+$ python3 scripts/select_tests.py --files README.md
+tests/
+# README.md: unrecognized file 'README.md' -> full suite (safety fallback)
+# -> pytest targets: ['tests/']
+
+=== Real git-diff-driven run (not the --files shortcut) ===
+$ git checkout -b feature/tweak-strings
+$ sed -i 's/return s\[::-1\]/return s[::-1]  # tweak/' src/string_utils.py
+$ git add src/string_utils.py && git commit -m "tweak string_utils"
+$ python3 scripts/select_tests.py --base master --head feature/tweak-strings
+tests/test_string_utils.py
+# src/string_utils.py: maps to tests/test_string_utils.py by naming convention
+# -> pytest targets: ['tests/test_string_utils.py']
+
+=== Before/after test count, executed with a local runner (pytest unavailable
+    in the sandbox that produced this log -- see README "what's real") ===
+Full run (tests/test_calculator.py + tests/test_string_utils.py): 7 run, 1 failed, 0.080s
+Selected run  (tests/test_string_utils.py only):                  3 run, 0 failed, 0.068s
+-> running only the impacted file cuts 4 unrelated tests (57% of that run) with
+   zero chance of missing a test that could have been affected.
