@@ -1,0 +1,64 @@
+name: Agent-Optimized CI Pipeline
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+
+jobs:
+  select-and-test:
+    runs-on: ubuntu-latest
+    outputs:
+      build_failed: ${{ steps.run_tests.outcome == 'failure' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # full history so `git diff` against base works
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - run: pip install -r requirements.txt
+
+      - name: Select impacted tests
+        id: select
+        run: |
+          TARGETS=$(python scripts/select_tests.py \
+            --base "origin/${{ github.event.pull_request.base.ref || 'main' }}" \
+            --head "${{ github.sha }}")
+          echo "targets=$TARGETS" >> "$GITHUB_OUTPUT"
+          echo "Selected targets: $TARGETS"
+
+      - id: run_tests
+        name: Run selected tests
+        run: pytest ${{ steps.select.outputs.targets }} --tb=short 2>&1 | tee build_log.txt
+        continue-on-error: true # let the pipeline continue so the remediation agent can run
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            build_log.txt
+            select_tests_decision.json
+
+  remediate:
+    needs: select-and-test
+    if: needs.select-and-test.outputs.build_failed == 'true'
+    runs-on: ubuntu-latest
+    environment: agent-proposed # requires human review before this job's PR can be merged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: build-log }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install PyGithub # anthropic optional -- see scripts/remediation_agent.py
+      - name: Run remediation agent (missing-dependency class only)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.ref_name }}
+        run: python scripts/remediation_agent.py --log build_log.txt --requirements requirements.txt
+        # Non-zero exit (agent refuses to act on out-of-scope failures) is
+        # expected and should NOT be treated as a pipeline error -- it means
+        # "escalate to a human," not "the agent crashed."
+        continue-on-error: true
